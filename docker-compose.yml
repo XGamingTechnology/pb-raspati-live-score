@@ -1,10 +1,11 @@
 services:
   db:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: raspati_tournament
       POSTGRES_USER: raspati
-      POSTGRES_PASSWORD: raspati2026
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
     volumes:
       - raspati_db:/var/lib/postgresql/data
     healthcheck:
@@ -15,28 +16,27 @@ services:
 
   backend:
     build: ./backend
+    restart: unless-stopped
     environment:
       PORT: 3000
       POSTGRES_HOST: db
       POSTGRES_PORT: 5432
       POSTGRES_DB: raspati_tournament
       POSTGRES_USER: raspati
-      POSTGRES_PASSWORD: raspati2026
-      ADMIN_PIN: ${ADMIN_PIN:-2026}
-      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:8080}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      ADMIN_PIN: ${ADMIN_PIN:?ADMIN_PIN must be set}
+      FRONTEND_URL: ${FRONTEND_URL:?FRONTEND_URL must be set}
     depends_on:
       db:
         condition: service_healthy
-    ports:
-      - "3000:3000"
 
   frontend:
     build: ./frontend
-    environment:
+    restart: unless-stopped
     depends_on:
       - backend
     ports:
-      - "8080:80"
+      - "127.0.0.1:8180:80"
 
 volumes:
   raspati_db:
