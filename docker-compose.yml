@@ -1,0 +1,42 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: raspati_tournament
+      POSTGRES_USER: raspati
+      POSTGRES_PASSWORD: raspati2026
+    volumes:
+      - raspati_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U raspati -d raspati_tournament"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    environment:
+      PORT: 3000
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: raspati_tournament
+      POSTGRES_USER: raspati
+      POSTGRES_PASSWORD: raspati2026
+      ADMIN_PIN: ${ADMIN_PIN:-2026}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:8080}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+
+  frontend:
+    build: ./frontend
+    environment:
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"
+
+volumes:
+  raspati_db:
