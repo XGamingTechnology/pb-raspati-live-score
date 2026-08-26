@@ -1,266 +1,50 @@
-import { useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { jsPDF } from 'jspdf';
 
-type Standing = {
-  teamId: string;
-  name: string;
-  played: number;
-  won: number;
-  lost: number;
-  points: number;
-  pf: number;
-  pa: number;
-  diff: number;
-  provisionalRank: number;
-  tieUnresolved: boolean;
-};
+type Standing={teamId:string;name:string;played:number;won:number;lost:number;points:number;pf:number;pa:number;diff:number;provisionalRank:number;tieUnresolved:boolean};
+type Match={id:string;groupCode?:'A'|'B';stage?:'semifinal'|'third_place'|'final';teamA:string;teamB:string;scoreA:number|null;scoreB:number|null;status:'pending'|'completed';sequence?:number;slot?:number;playedAt:string|null};
+type ScoreHistoryEntry={seq:number;side:'A'|'B';scoreA:number;scoreB:number;at:string};
+type RecordingSession={id:string;title:string;participantA:string;participantB:string;scoreA:number;scoreB:number;status:'pending'|'live'|'completed';scoreHistory:ScoreHistoryEntry[];note:string|null;startedAt:string|null;playedAt:string|null;createdAt:string};
+type GroupData={groupCode:'A'|'B';standings:Standing[];pendingMatches:Match[];completedMatches:Match[]};
+type Overview={tournament:{name:string;totalMatches:number;completedMatches:number;remainingMatches:number;standingsAreFinal:boolean;phase:'group'|'semifinal'|'finals'|'completed';updatedAt:string};regulations:{targetScore:number;switchSidesAt:number;deuceFrom:string;winBy:number;capScore:number;semifinalPairing:string;thirdPlace:boolean};groups:GroupData[];knockout:{semifinals:Match[];thirdPlace:Match[];final:Match[]};recordingSessions:RecordingSession[]};
+const API_URL=import.meta.env.VITE_API_URL||'/api';
 
-type Match = {
-  id: string;
-  groupCode: 'A' | 'B';
-  teamA: string;
-  teamB: string;
-  scoreA: number | null;
-  scoreB: number | null;
-  status: 'pending' | 'completed';
-  sequence: number;
-  playedAt: string | null;
-};
-
-type GroupData = {
-  groupCode: 'A' | 'B';
-  standings: Standing[];
-  pendingMatches: Match[];
-  completedMatches: Match[];
-};
-
-type Overview = {
-  tournament: {
-    name: string;
-    totalMatches: number;
-    completedMatches: number;
-    remainingMatches: number;
-    standingsAreFinal: boolean;
-    updatedAt: string;
-  };
-  groups: GroupData[];
-};
-
-const API_URL = import.meta.env.VITE_API_URL || '/api';
-
-function App() {
-  const [data, setData] = useState<Overview | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [adminPin, setAdminPin] = useState(() => sessionStorage.getItem('raspati_admin_pin') || '');
-  const [adminMode, setAdminMode] = useState(false);
-  const [savingId, setSavingId] = useState<string | null>(null);
-
-  const load = async (silent = false) => {
-    try {
-      if (!silent) setLoading(true);
-      const res = await fetch(`${API_URL}/tournament/overview`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setData(await res.json());
-      setError('');
-    } catch (e: any) {
-      setError(e.message || 'Gagal mengambil data');
-    } finally {
-      if (!silent) setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    load();
-    const timer = setInterval(() => load(true), 5000);
-    return () => clearInterval(timer);
-  }, []);
-
-  const summary = useMemo(() => data?.tournament, [data]);
-
-  const activateAdmin = () => {
-    const pin = window.prompt('Masukkan PIN panitia:', adminPin);
-    if (!pin) return;
-    setAdminPin(pin);
-    sessionStorage.setItem('raspati_admin_pin', pin);
-    setAdminMode(true);
-  };
-
-  const saveScore = async (match: Match, scoreA: number, scoreB: number) => {
-    if (!adminPin) return activateAdmin();
-    setSavingId(match.id);
-    try {
-      const res = await fetch(`${API_URL}/tournament/matches/${match.id}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-admin-pin': adminPin,
-        },
-        body: JSON.stringify({ scoreA, scoreB }),
-      });
-      const payload = await res.json();
-      if (!res.ok) throw new Error(Array.isArray(payload.message) ? payload.message.join(', ') : payload.message || 'Gagal menyimpan');
-      setData(payload);
-    } catch (e: any) {
-      alert(e.message || 'Gagal menyimpan skor');
-    } finally {
-      setSavingId(null);
-    }
-  };
-
-  const resetScore = async (match: Match) => {
-    if (!adminPin) return activateAdmin();
-    if (!window.confirm(`Batalkan hasil ${match.teamA} vs ${match.teamB}?`)) return;
-    setSavingId(match.id);
-    try {
-      const res = await fetch(`${API_URL}/tournament/matches/${match.id}/score`, {
-        method: 'DELETE',
-        headers: { 'x-admin-pin': adminPin },
-      });
-      const payload = await res.json();
-      if (!res.ok) throw new Error(payload.message || 'Gagal membatalkan skor');
-      setData(payload);
-    } catch (e: any) {
-      alert(e.message || 'Gagal membatalkan skor');
-    } finally {
-      setSavingId(null);
-    }
-  };
-
-  if (loading && !data) return <div className="center-state">Memuat klasemen…</div>;
-  if (error && !data) return <div className="center-state error">{error}</div>;
-  if (!data) return null;
-
-  return (
-    <div className="app-shell">
-      <header className="hero">
-        <div>
-          <div className="brand-chip">RASPATI PLUS · BADMINTON CLUB</div>
-          <h1>Live Score Turnamen Internal</h1>
-          <p>Pencatatan skor dan klasemen sementara yang otomatis terhitung.</p>
-        </div>
-        <div className="hero-actions">
-          <button className="btn ghost" onClick={() => load()}>Refresh</button>
-          <button className={`btn ${adminMode ? 'dark' : 'primary'}`} onClick={() => adminMode ? setAdminMode(false) : activateAdmin()}>
-            {adminMode ? 'Tutup Mode Panitia' : 'Mode Panitia'}
-          </button>
-        </div>
-      </header>
-
-      <section className="summary-grid">
-        <SummaryCard label="Pertandingan selesai" value={`${summary?.completedMatches}/${summary?.totalMatches}`} />
-        <SummaryCard label="Sisa pertandingan" value={String(summary?.remainingMatches)} />
-        <SummaryCard label="Status klasemen" value={summary?.standingsAreFinal ? 'FINAL' : 'SEMENTARA'} accent />
-      </section>
-
-      {!summary?.standingsAreFinal && (
-        <div className="notice">
-          Klasemen masih sementara karena jumlah pertandingan tiap pasangan belum tentu sama. Peringkat final ditetapkan setelah seluruh laga grup selesai.
-        </div>
-      )}
-
-      <main className="content-grid">
-        {data.groups.map((group) => (
-          <GroupPanel key={group.groupCode} group={group} adminMode={adminMode} savingId={savingId} onSave={saveScore} onReset={resetScore} />
-        ))}
-      </main>
-
-      <footer>
-        Update otomatis setiap 5 detik · Menang 3 poin · Kalah 0 poin · Tie-break final: head-to-head → selisih poin → PF → keputusan panitia.
-      </footer>
-    </div>
-  );
+function App(){
+ const[data,setData]=useState<Overview|null>(null),[loading,setLoading]=useState(true),[error,setError]=useState(''),[adminPin,setAdminPin]=useState(()=>sessionStorage.getItem('raspati_admin_pin')||''),[adminMode,setAdminMode]=useState(false),[savingId,setSavingId]=useState<string|null>(null);
+ const load=async(silent=false)=>{try{if(!silent)setLoading(true);const r=await fetch(`${API_URL}/tournament/overview`);if(!r.ok)throw new Error(`HTTP ${r.status}`);setData(await r.json());setError('')}catch(e:any){setError(e.message||'Gagal mengambil data')}finally{if(!silent)setLoading(false)}};
+ useEffect(()=>{load();const t=setInterval(()=>load(true),5000);return()=>clearInterval(t)},[]);
+ const summary=useMemo(()=>data?.tournament,[data]);
+ const activateAdmin=()=>{const pin=window.prompt('Masukkan PIN panitia:',adminPin);if(!pin)return false;setAdminPin(pin);sessionStorage.setItem('raspati_admin_pin',pin);setAdminMode(true);return true};
+ const adminRequest=async(url:string,options:RequestInit={})=>{if(!adminPin){activateAdmin();throw new Error('Aktifkan Mode Panitia lalu ulangi tindakan.')}const r=await fetch(url,{...options,headers:{...(options.body?{'Content-Type':'application/json'}:{}),'x-admin-pin':adminPin,...(options.headers||{})}});const p=await r.json();if(!r.ok)throw new Error(Array.isArray(p.message)?p.message.join(', '):p.message||'Permintaan gagal');setData(p)};
+ const act=async(id:string,fn:()=>Promise<void>)=>{setSavingId(id);try{await fn()}catch(e:any){alert(e.message||'Permintaan gagal')}finally{setSavingId(null)}};
+ const saveScore=(m:Match,a:number,b:number,kind:'group'|'knockout')=>act(m.id,()=>adminRequest(`${API_URL}/tournament/${kind==='group'?`matches/${m.id}`:`knockout/${m.id}`}`,{method:'PATCH',body:JSON.stringify({scoreA:a,scoreB:b})}));
+ const resetScore=(m:Match,kind:'group'|'knockout')=>{if(window.confirm(`Batalkan hasil ${m.teamA} vs ${m.teamB}?`))act(m.id,()=>adminRequest(`${API_URL}/tournament/${kind==='group'?`matches/${m.id}/score`:`knockout/${m.id}/score`}`,{method:'DELETE'}))};
+ const sessionAction=(s:RecordingSession,path:string,method='POST',body?:unknown)=>act(s.id,()=>adminRequest(`${API_URL}/tournament/sessions/${s.id}/${path}`,{method,body:body?JSON.stringify(body):undefined}));
+ const createSession=async(p:{title:string;participantA:string;participantB:string;note?:string})=>{try{await adminRequest(`${API_URL}/tournament/sessions`,{method:'POST',body:JSON.stringify(p)})}catch(e:any){alert(e.message||'Gagal membuat exhibition')}};
+ const deleteSession=async(s:RecordingSession)=>{if(!window.confirm(`Hapus exhibition “${s.title}”?`))return;try{await adminRequest(`${API_URL}/tournament/sessions/${s.id}`,{method:'DELETE'})}catch(e:any){alert(e.message||'Gagal menghapus sesi')}};
+ if(loading&&!data)return <div className="center-state">Memuat turnamen…</div>;if(error&&!data)return <div className="center-state error">{error}</div>;if(!data)return null;
+ return <div className="app-shell">
+  <header className="hero"><div><div className="brand-chip">RASPATI PLUS · BADMINTON CLUB</div><h1>Live Score Turnamen Internal</h1><p>Klasemen, bagan semifinal/final otomatis, dan Exhibition Score.</p></div><div className="hero-actions"><button className="btn ghost" onClick={()=>load()}>Refresh</button><button className={`btn ${adminMode?'dark':'primary'}`} onClick={()=>adminMode?setAdminMode(false):activateAdmin()}>{adminMode?'Tutup Mode Panitia':'Mode Panitia'}</button></div></header>
+  <section className="summary-grid"><SummaryCard label="Pertandingan grup" value={`${summary?.completedMatches}/${summary?.totalMatches}`}/><SummaryCard label="Fase turnamen" value={phaseLabel(summary?.phase)} accent/><SummaryCard label="Sistem skor" value={`${data.regulations.targetScore} pts · cap ${data.regulations.capScore}`}/></section>
+  <div className="notice regulation-notice"><strong>Regulasi:</strong> 1 game sampai 42 · pindah sisi 21 · deuce 41-41 unggul 2 · cap 45 · semifinal A1 vs B2 dan B1 vs A2.</div>
+  {summary?.standingsAreFinal?<KnockoutPanel knockout={data.knockout} adminMode={adminMode} savingId={savingId} onSave={(m,a,b)=>saveScore(m,a,b,'knockout')} onReset={m=>resetScore(m,'knockout')}/>:<div className="notice">Bagan semifinal dibuat otomatis setelah semua pertandingan grup selesai dan tie-break final.</div>}
+  <main className="content-grid">{data.groups.map(g=><GroupPanel key={g.groupCode} group={g} adminMode={adminMode} savingId={savingId} onSave={(m,a,b)=>saveScore(m,a,b,'group')} onReset={m=>resetScore(m,'group')}/>)}</main>
+  <RecordingSessionsPanel sessions={data.recordingSessions} adminMode={adminMode} savingId={savingId} onCreate={createSession} onStart={s=>sessionAction(s,'start')} onPoint={(s,side)=>sessionAction(s,'point','POST',{side})} onUndo={s=>sessionAction(s,'undo')} onFinish={s=>sessionAction(s,'finish')} onReset={s=>sessionAction(s,'score','DELETE')} onDelete={deleteSession}/>
+  <footer>Update otomatis setiap 5 detik · Exhibition tidak memengaruhi klasemen turnamen.</footer>
+ </div>
 }
+const phaseLabel=(p?:Overview['tournament']['phase'])=>p==='semifinal'?'SEMIFINAL':p==='finals'?'FINAL / JUARA 3':p==='completed'?'SELESAI':'PENYISIHAN';
+function SummaryCard({label,value,accent=false}:{label:string;value:string;accent?:boolean}){return <div className={`summary-card ${accent?'accent':''}`}><span>{label}</span><strong>{value}</strong></div>}
 
-function SummaryCard({ label, value, accent = false }: { label: string; value: string; accent?: boolean }) {
-  return (
-    <div className={`summary-card ${accent ? 'accent' : ''}`}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
-}
+function KnockoutPanel({knockout,adminMode,savingId,onSave,onReset}:{knockout:Overview['knockout'];adminMode:boolean;savingId:string|null;onSave:(m:Match,a:number,b:number)=>void;onReset:(m:Match)=>void}){return <section className="knockout-panel"><div className="section-heading"><div><span className="eyebrow">BABAK GUGUR</span><h2>Bagan Otomatis</h2></div><span className="match-count">A1×B2 · B1×A2</span></div><div className="bracket-grid"><div className="bracket-column"><h3>Semifinal</h3>{knockout.semifinals.map(m=><BracketMatch key={m.id} label={`SF ${m.slot}`} match={m} adminMode={adminMode} saving={savingId===m.id} onSave={onSave} onReset={onReset}/>)}</div><div className="bracket-column"><h3>Juara 3</h3>{knockout.thirdPlace.length?knockout.thirdPlace.map(m=><BracketMatch key={m.id} label="Perebutan Juara 3" match={m} adminMode={adminMode} saving={savingId===m.id} onSave={onSave} onReset={onReset}/>):<div className="bracket-placeholder">Terbentuk setelah semifinal selesai</div>}</div><div className="bracket-column final-column"><h3>Final</h3>{knockout.final.length?knockout.final.map(m=><BracketMatch key={m.id} label="FINAL" match={m} adminMode={adminMode} saving={savingId===m.id} onSave={onSave} onReset={onReset}/>):<div className="bracket-placeholder">Pemenang SF1 vs pemenang SF2</div>}</div></div></section>}
+function BracketMatch({label,match,adminMode,saving,onSave,onReset}:{label:string;match:Match;adminMode:boolean;saving:boolean;onSave:(m:Match,a:number,b:number)=>void;onReset:(m:Match)=>void}){return <div className="bracket-card"><div className="bracket-label">{label}</div><ScoreEntry match={match} adminMode={adminMode} saving={saving} onSave={onSave}/>{match.status==='completed'&&adminMode&&<button className="link-btn" onClick={()=>onReset(match)}>koreksi hasil</button>}</div>}
+function GroupPanel({group,adminMode,savingId,onSave,onReset}:{group:GroupData;adminMode:boolean;savingId:string|null;onSave:(m:Match,a:number,b:number)=>void;onReset:(m:Match)=>void}){return <section className="group-panel"><div className="section-heading"><div><span className="eyebrow">GROUP {group.groupCode}</span><h2>{group.pendingMatches.length?'Klasemen Sementara':'Klasemen Akhir'}</h2></div><span className="match-count">{group.pendingMatches.length} laga tersisa</span></div><div className="table-wrap"><table><thead><tr><th>#</th><th>Pasangan</th><th>M</th><th>W</th><th>L</th><th>Pts</th><th>PF</th><th>PA</th><th>+/-</th></tr></thead><tbody>{group.standings.map(r=><tr key={r.teamId}><td><span className="rank">{r.provisionalRank}{r.tieUnresolved?'*':''}</span></td><td className="team-name">{r.name}</td><td>{r.played}</td><td>{r.won}</td><td>{r.lost}</td><td><strong>{r.points}</strong></td><td>{r.pf}</td><td>{r.pa}</td><td className={r.diff>0?'positive':r.diff<0?'negative':''}>{r.diff>0?'+':''}{r.diff}</td></tr>)}</tbody></table></div>{group.pendingMatches.length>0&&<><div className="subsection-title">Sisa Pertandingan</div><div className="match-list">{group.pendingMatches.map(m=><ScoreEntry key={m.id} match={m} adminMode={adminMode} saving={savingId===m.id} onSave={onSave}/>)}</div></>}<div className="subsection-title">Hasil Tercatat</div><div className="results-list">{group.completedMatches.map(m=><div className="result-row" key={m.id}><span>{m.teamA}</span><strong>{m.scoreA} – {m.scoreB}</strong><span>{m.teamB}</span>{adminMode&&<button className="link-btn" onClick={()=>onReset(m)}>koreksi</button>}</div>)}</div></section>}
+function ScoreEntry({match,adminMode,saving,onSave}:{match:Match;adminMode:boolean;saving:boolean;onSave:(m:Match,a:number,b:number)=>void}){const[a,setA]=useState(''),[b,setB]=useState('');if(match.status==='completed')return <div className="score-row completed"><div className="score-team">{match.teamA}</div><strong className="completed-score">{match.scoreA} : {match.scoreB}</strong><div className="score-team right">{match.teamB}</div></div>;return <div className="score-row"><div className="score-team">{match.teamA}</div>{adminMode?<div className="score-inputs"><input inputMode="numeric" value={a} onChange={e=>setA(e.target.value.replace(/\D/g,'').slice(0,2))}/><span>:</span><input inputMode="numeric" value={b} onChange={e=>setB(e.target.value.replace(/\D/g,'').slice(0,2))}/><button className="mini-btn" disabled={saving||!a||!b} onClick={()=>onSave(match,+a,+b)}>Simpan</button></div>:<div className="vs">VS</div>}<div className="score-team right">{match.teamB}</div></div>}
 
-function GroupPanel({ group, adminMode, savingId, onSave, onReset }: {
-  group: GroupData;
-  adminMode: boolean;
-  savingId: string | null;
-  onSave: (match: Match, scoreA: number, scoreB: number) => void;
-  onReset: (match: Match) => void;
-}) {
-  return (
-    <section className="group-panel">
-      <div className="section-heading">
-        <div>
-          <span className="eyebrow">GROUP {group.groupCode}</span>
-          <h2>Klasemen Sementara</h2>
-        </div>
-        <span className="match-count">{group.pendingMatches.length} laga tersisa</span>
-      </div>
-
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>#</th><th>Pasangan</th><th>M</th><th>W</th><th>L</th><th>Pts</th><th>PF</th><th>PA</th><th>+/-</th>
-            </tr>
-          </thead>
-          <tbody>
-            {group.standings.map((row) => (
-              <tr key={row.teamId}>
-                <td><span className="rank">{row.provisionalRank}{row.tieUnresolved ? '*' : ''}</span></td>
-                <td className="team-name">{row.name}</td>
-                <td>{row.played}</td><td>{row.won}</td><td>{row.lost}</td>
-                <td><strong>{row.points}</strong></td><td>{row.pf}</td><td>{row.pa}</td>
-                <td className={row.diff > 0 ? 'positive' : row.diff < 0 ? 'negative' : ''}>{row.diff > 0 ? '+' : ''}{row.diff}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <div className="tiny-note">* tie-break belum final karena head-to-head di antara tim dengan poin sama belum seluruhnya dimainkan.</div>
-
-      <div className="subsection-title">Sisa Pertandingan</div>
-      <div className="match-list">
-        {group.pendingMatches.length === 0 && <div className="empty">Semua pertandingan grup sudah selesai.</div>}
-        {group.pendingMatches.map((match) => (
-          <ScoreRow key={match.id} match={match} adminMode={adminMode} saving={savingId === match.id} onSave={onSave} />
-        ))}
-      </div>
-
-      <div className="subsection-title">Hasil Tercatat</div>
-      <div className="results-list">
-        {group.completedMatches.map((match) => (
-          <div className="result-row" key={match.id}>
-            <span>{match.teamA}</span>
-            <strong>{match.scoreA} – {match.scoreB}</strong>
-            <span>{match.teamB}</span>
-            {adminMode && <button className="link-btn" disabled={savingId === match.id} onClick={() => onReset(match)}>koreksi</button>}
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function ScoreRow({ match, adminMode, saving, onSave }: { match: Match; adminMode: boolean; saving: boolean; onSave: (m: Match, a: number, b: number) => void }) {
-  const [a, setA] = useState('');
-  const [b, setB] = useState('');
-  return (
-    <div className="score-row">
-      <div className="score-team left">{match.teamA}</div>
-      {adminMode ? (
-        <div className="score-inputs">
-          <input inputMode="numeric" value={a} onChange={(e) => setA(e.target.value.replace(/\D/g, '').slice(0,2))} placeholder="0" />
-          <span>:</span>
-          <input inputMode="numeric" value={b} onChange={(e) => setB(e.target.value.replace(/\D/g, '').slice(0,2))} placeholder="0" />
-          <button className="mini-btn" disabled={saving || a === '' || b === ''} onClick={() => onSave(match, Number(a), Number(b))}>{saving ? '...' : 'Simpan'}</button>
-        </div>
-      ) : (
-        <div className="vs">VS</div>
-      )}
-      <div className="score-team right">{match.teamB}</div>
-    </div>
-  );
-}
-
+function RecordingSessionsPanel({sessions,adminMode,savingId,onCreate,onStart,onPoint,onUndo,onFinish,onReset,onDelete}:{sessions:RecordingSession[];adminMode:boolean;savingId:string|null;onCreate:(p:{title:string;participantA:string;participantB:string;note?:string})=>void;onStart:(s:RecordingSession)=>void;onPoint:(s:RecordingSession,side:'A'|'B')=>void;onUndo:(s:RecordingSession)=>void;onFinish:(s:RecordingSession)=>void;onReset:(s:RecordingSession)=>void;onDelete:(s:RecordingSession)=>void}){return <section className="sessions-panel"><div className="section-heading"><div><span className="eyebrow">EXHIBITION SCORE</span><h2>Sesi Pencatatan Sendiri</h2></div><span className="match-count">{sessions.length} sesi</span></div><p className="section-copy">Buat sesi → isi pasangan → mulai → catat poin satu per satu → selesai → grafik otomatis → share PNG/WhatsApp atau PDF.</p>{adminMode&&<SessionForm onCreate={onCreate}/>}<div className="session-grid">{sessions.length===0&&<div className="empty">Belum ada exhibition.</div>}{sessions.map(s=><SessionCard key={s.id} session={s} adminMode={adminMode} saving={savingId===s.id} onStart={onStart} onPoint={onPoint} onUndo={onUndo} onFinish={onFinish} onReset={onReset} onDelete={onDelete}/>)}</div></section>}
+function SessionForm({onCreate}:{onCreate:(p:{title:string;participantA:string;participantB:string;note?:string})=>void}){const[title,setTitle]=useState(''),[a,setA]=useState(''),[b,setB]=useState(''),[note,setNote]=useState('');const submit=(e:FormEvent)=>{e.preventDefault();if(!title||!a||!b)return;onCreate({title,participantA:a,participantB:b,note:note||undefined});setTitle('');setA('');setB('');setNote('')};return <form className="session-form" onSubmit={submit}><input value={title} onChange={e=>setTitle(e.target.value)} placeholder="Nama sesi, mis. Exhibition Jumat"/><input value={a} onChange={e=>setA(e.target.value)} placeholder="Pasangan A"/><input value={b} onChange={e=>setB(e.target.value)} placeholder="Pasangan B"/><input value={note} onChange={e=>setNote(e.target.value)} placeholder="Catatan opsional"/><button className="btn primary">+ Buat Exhibition</button></form>}
+function SessionCard({session,adminMode,saving,onStart,onPoint,onUndo,onFinish,onReset,onDelete}:{session:RecordingSession;adminMode:boolean;saving:boolean;onStart:(s:RecordingSession)=>void;onPoint:(s:RecordingSession,side:'A'|'B')=>void;onUndo:(s:RecordingSession)=>void;onFinish:(s:RecordingSession)=>void;onReset:(s:RecordingSession)=>void;onDelete:(s:RecordingSession)=>void}){const live=session.status==='live';return <div className={`session-card ${live?'live':''}`}><div className="session-card-head"><div><strong>{session.title}</strong><div className={`session-status ${session.status}`}>{session.status==='live'?'LIVE':session.status==='completed'?'SELESAI':'BELUM MULAI'}</div></div>{session.note&&<span>{session.note}</span>}</div><div className="ex-score"><div><b>{session.participantA}</b><strong>{session.scoreA}</strong></div><span>—</span><div><b>{session.participantB}</b><strong>{session.scoreB}</strong></div></div><ScoreChart session={session}/>{adminMode&&<div className="ex-controls">{session.status==='pending'&&<button className="btn primary" disabled={saving} onClick={()=>onStart(session)}>Mulai</button>}{live&&<><button className="point-btn" onClick={()=>onPoint(session,'A')}>+1 {session.participantA}</button><button className="point-btn" onClick={()=>onPoint(session,'B')}>+1 {session.participantB}</button><button className="btn ghost-dark" disabled={!session.scoreHistory?.length} onClick={()=>onUndo(session)}>Undo</button><button className="btn dark-solid" onClick={()=>onFinish(session)}>Selesai</button></>}{session.status==='completed'&&<button className="btn ghost-dark" onClick={()=>onReset(session)}>Reset</button>}<button className="link-btn danger" onClick={()=>onDelete(session)}>hapus</button></div>}{session.status==='completed'&&<ExportButtons session={session}/>}</div>}
+function ScoreChart({session}:{session:RecordingSession}){const history=[{scoreA:0,scoreB:0},...(session.scoreHistory||[])];const max=Math.max(1,...history.map(p=>Math.max(p.scoreA,p.scoreB)));const w=520,h=150,p=18;const pts=(key:'scoreA'|'scoreB')=>history.map((x,i)=>`${p+(i/Math.max(1,history.length-1))*(w-p*2)},${h-p-(x[key]/max)*(h-p*2)}`).join(' ');return <div className="chart-wrap"><svg viewBox={`0 0 ${w} ${h}`} role="img" aria-label="Grafik perkembangan skor"><line x1={p} y1={h-p} x2={w-p} y2={h-p} className="chart-axis"/><polyline points={pts('scoreA')} className="line-a"/><polyline points={pts('scoreB')} className="line-b"/></svg><div className="chart-legend"><span>● {session.participantA}</span><span>● {session.participantB}</span><span>{session.scoreHistory?.length||0} rally tercatat</span></div></div>}
+function makeScoreCanvas(session:RecordingSession){const c=document.createElement('canvas');c.width=1080;c.height=1350;const x=c.getContext('2d')!;x.fillStyle='#ffffff';x.fillRect(0,0,c.width,c.height);x.fillStyle='#111827';x.fillRect(0,0,c.width,230);x.fillStyle='#ffffff';x.font='700 38px sans-serif';x.fillText('PB RASPATI PLUS',70,80);x.font='700 54px sans-serif';x.fillText('EXHIBITION SCORE',70,150);x.font='28px sans-serif';x.fillText(session.title,70,200);x.fillStyle='#111827';x.font='700 34px sans-serif';x.fillText(session.participantA,70,330);x.fillText(session.participantB,650,330);x.font='700 120px sans-serif';x.fillText(String(session.scoreA),90,470);x.fillText(String(session.scoreB),690,470);x.font='700 42px sans-serif';x.fillText('—',515,445);x.font='24px sans-serif';x.fillStyle='#57534e';x.fillText(`Status: ${session.status==='completed'?'SELESAI':'LIVE'} · Rally tercatat: ${session.scoreHistory?.length||0}`,70,540);const hist=[{scoreA:0,scoreB:0},...(session.scoreHistory||[])],left=80,top=650,cw=920,ch=420,max=Math.max(1,...hist.map(v=>Math.max(v.scoreA,v.scoreB)));x.strokeStyle='#d6d3d1';x.lineWidth=2;x.strokeRect(left,top,cw,ch);const draw=(key:'scoreA'|'scoreB',color:string)=>{x.beginPath();x.strokeStyle=color;x.lineWidth=8;hist.forEach((v,i)=>{const px=left+(i/Math.max(1,hist.length-1))*cw,py=top+ch-(v[key]/max)*ch;i?x.lineTo(px,py):x.moveTo(px,py)});x.stroke()};draw('scoreA','#dc2626');draw('scoreB','#111827');x.fillStyle='#57534e';x.font='22px sans-serif';x.fillText(`${session.participantA} = merah`,80,1130);x.fillText(`${session.participantB} = hitam`,80,1170);x.fillText(`PB Raspati Plus · ${new Date(session.playedAt||Date.now()).toLocaleString('id-ID')}`,80,1260);return c}
+function ExportButtons({session}:{session:RecordingSession}){const png=async()=>{const c=makeScoreCanvas(session);const blob=await new Promise<Blob|null>(r=>c.toBlob(r,'image/png'));if(!blob)return;const file=new File([blob],`${session.title.replace(/\s+/g,'-')}.png`,{type:'image/png'});if(navigator.share&&navigator.canShare?.({files:[file]})){await navigator.share({title:session.title,text:`${session.participantA} ${session.scoreA}-${session.scoreB} ${session.participantB}`,files:[file]})}else{const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=file.name;a.click();URL.revokeObjectURL(a.href)}};const pdf=()=>{const c=makeScoreCanvas(session);const doc=new jsPDF({orientation:'portrait',unit:'mm',format:'a4'});doc.addImage(c.toDataURL('image/png'),'PNG',0,0,210,262.5);doc.save(`${session.title.replace(/\s+/g,'-')}.pdf`)};return <div className="export-actions"><button className="btn primary" onClick={png}>Share PNG / WA</button><button className="btn ghost-dark" onClick={pdf}>Download PDF</button></div>}
 export default App;
